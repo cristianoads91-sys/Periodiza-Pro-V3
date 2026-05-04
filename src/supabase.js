@@ -1,9 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
 // Credenciais do projeto Supabase
-const SUPABASE_URL = "https://timkysvfqtlteamvefrb.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRpbWt5c3ZmcXRsdGVhbXZlZnJiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NzcyMTksImV4cCI6MjA5MjA1MzIxOX0.WQ8jCI-LUAy4pdud42dY06tWXrBa2QcI4TUUx7-EU48";
-
+const SUPABASE_URL = "import.meta.env.VITE_SUPABASE_URL";
+const SUPABASE_ANON_KEY = "import.meta.env.VITE_SUPABASE_ANON_KEY";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
