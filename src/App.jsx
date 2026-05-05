@@ -1317,6 +1317,41 @@ function MesoEditor({mesociclos, setMesociclos}) {
                 </div>
               </div>
             </CardBox>
+          {/* NOVA SEÇÃO: MÉTODOS DE TREINO */}
+    <CardBox>
+      <div style={{padding:12}}>
+        <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:10}}>
+          <span style={{fontSize:20}}>💪</span>
+          <div style={{fontWeight:900,fontSize:14,color:C.purple}}>MÉTODOS DE TREINO</div>
+        </div>
+        <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:12}}>
+          Guia completo de métodos de treinamento para aplicação na prescrição de exercícios.
+        </div>
+      </div>
+    </CardBox>
+
+    {/* Métodos agrupados por categoria */}
+    {Object.entries(getMethodsByCategory()).map(([category, methods]) => (
+      <CardBox key={category}>
+        <div style={{padding:12}}>
+          <div style={{fontWeight:900,fontSize:13,color:C.purple,marginBottom:10,borderBottom:`2px solid ${C.purple}33`,paddingBottom:6}}>
+            {category}
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {methods.map(method => (
+              <div key={method.id} style={{background:C.bg,borderRadius:7,padding:10,border:`1px solid ${C.border}`}}>
+                <div style={{fontWeight:700,fontSize:12,color:C.text,marginBottom:4}}>
+                  {method.name}
+                </div>
+                <div style={{fontSize:10,color:C.muted,lineHeight:1.5}}>
+                  {method.description}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </CardBox>
+    ))}
           ))}
         </div>
       )}
