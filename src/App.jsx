@@ -1317,7 +1317,7 @@ function MesoEditor({mesociclos, setMesociclos}) {
                 </div>
               </div>
             </CardBox>
-          {/* NOVA SEÇÃO: MÉTODOS DE TREINO */}
+{/* NOVA SEÇÃO: MÉTODOS DE TREINO */}
     <CardBox>
       <div style={{padding:12}}>
         <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:10}}>
@@ -1330,7 +1330,6 @@ function MesoEditor({mesociclos, setMesociclos}) {
       </div>
     </CardBox>
 
-    {/* Métodos agrupados por categoria */}
     {Object.entries(getMethodsByCategory()).map(([category, methods]) => (
       <CardBox key={category}>
         <div style={{padding:12}}>
@@ -1349,6 +1348,9 @@ function MesoEditor({mesociclos, setMesociclos}) {
               </div>
             ))}
           </div>
+        </div>
+      </CardBox>
+    ))}
         </div>
       </CardBox>
     ))}
