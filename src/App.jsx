@@ -5,7 +5,7 @@ import {
   ResponsiveContainer, Legend, ReferenceLine
 } from "recharts";
 import { supabase, syncToCloud, loadFromCloud } from "./supabase.js";
-
+import { trainingMethods, getMethodsByCategory } from './trainingMethods';
 // ─── PALETTE ─────────────────────────────────────────────────────────
 const C = {
   bg:"#07090d", surface:"#0c1018", card:"#121820", border:"#1a2438",
