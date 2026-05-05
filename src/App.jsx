@@ -1317,6 +1317,7 @@ function MesoEditor({mesociclos, setMesociclos}) {
                 </div>
               </div>
             </CardBox>
+          ))}
 {/* NOVA SECAO: METODOS DE TREINO */}
     <CardBox>
       <div style={{padding:12}}>
