@@ -1585,6 +1585,78 @@ function MicroEditor({week, macro, setMacro, exercicios, selectedWeek, setSelWee
                                     style={{width:"100%",background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:5,padding:"5px 6px",fontSize:11,boxSizing:"border-box"}}/>
                                 </div>
                               </div>
+                              {/* MÉTODO DE TREINO */}
+<div style={{marginBottom:7}}>
+  <div style={{fontSize:8,color:C.purple,letterSpacing:.5,marginBottom:2,fontWeight:700}}>💪 MÉTODO DE TREINO</div>
+  <select 
+    value={ex.metodo||"tradicional"}
+    onChange={e => updExField(di, treino.id, ei, "metodo", e.target.value)}
+    style={{
+      width:"100%",
+      background:ex.metodo && ex.metodo !== "tradicional" ? C.purple+"14" : C.bg,
+      border:`1px solid ${ex.metodo && ex.metodo !== "tradicional" ? C.purple+"55" : C.border}`,
+      color:ex.metodo && ex.metodo !== "tradicional" ? C.purple : C.text,
+      borderRadius:5,
+      padding:"5px 7px",
+      fontSize:11,
+      fontWeight:ex.metodo && ex.metodo !== "tradicional" ? 700 : 400,
+      boxSizing:"border-box"
+    }}>
+    <option value="tradicional">Tradicional</option>
+    <optgroup label="Intensificação">
+      <option value="super-set">Super-set</option>
+      <option value="bi-set">Bi-set</option>
+      <option value="tri-set">Tri-set</option>
+      <option value="set-gigante">Set Gigante</option>
+      <option value="drop-set">Drop-set</option>
+      <option value="rest-pause">Rest-pause</option>
+      <option value="fst-7">FST-7</option>
+      <option value="21s">21s</option>
+      <option value="cluster-set">Cluster Set</option>
+    </optgroup>
+    <optgroup label="Contração">
+      <option value="isometrico">Isométrico</option>
+      <option value="excentrico">Excêntrico</option>
+      <option value="concentrico">Concêntrico</option>
+      <option value="isodinamico">Isodinâmico</option>
+    </optgroup>
+    <optgroup label="Velocidade/Potência">
+      <option value="pliometrico">Pliométrico</option>
+      <option value="balistico">Balístico</option>
+      <option value="cat">CAT</option>
+    </optgroup>
+    <optgroup label="Pirâmide">
+      <option value="piramide-crescente">Pirâmide Crescente</option>
+      <option value="piramide-decrescente">Pirâmide Decrescente</option>
+      <option value="piramide-truncada">Pirâmide Truncada</option>
+    </optgroup>
+    <optgroup label="Repetição">
+      <option value="repeticoes-forcadas">Repetições Forçadas</option>
+      <option value="repeticoes-parciais">Repetições Parciais</option>
+      <option value="repeticoes-negativas">Repetições Negativas</option>
+      <option value="1-1-4-rep">1-1/4 Rep</option>
+    </optgroup>
+    <optgroup label="Tensão/Tempo">
+      <option value="tut">TUT (Time Under Tension)</option>
+      <option value="isometria-funcional">Isometria Funcional</option>
+      <option value="contraste-carga">Contraste de Carga</option>
+      <option value="bfr">Oclusão Vascular (BFR)</option>
+    </optgroup>
+    <optgroup label="Avançado">
+      <option value="pre-exaustao">Pré-exaustão</option>
+      <option value="pos-exaustao">Pós-exaustão</option>
+      <option value="onda">Onda</option>
+      <option value="contrast-loading">Contrast Loading</option>
+      <option value="complex-training">Complex Training</option>
+      <option value="edt">EDT</option>
+      <option value="dc-training">DC Training</option>
+      <option value="gvt">GVT (10x10)</option>
+      <option value="5x5">5x5</option>
+      <option value="stripping">Stripping</option>
+      <option value="burns">Burns</option>
+    </optgroup>
+  </select>
+</div>
 
                               {/* Distância total + unidade + tempo – importante para corrida/ciclismo/natação */}
                               <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:5,marginBottom:8}}>
