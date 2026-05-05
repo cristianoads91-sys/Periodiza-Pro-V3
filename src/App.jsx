@@ -1317,15 +1317,14 @@ function MesoEditor({mesociclos, setMesociclos}) {
                 </div>
               </div>
             </CardBox>
-{/* NOVA SEÇÃO: MÉTODOS DE TREINO */}
+{/* NOVA SECAO: METODOS DE TREINO */}
     <CardBox>
       <div style={{padding:12}}>
         <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:10}}>
-          <span style={{fontSize:20}}>💪</span>
-          <div style={{fontWeight:900,fontSize:14,color:C.purple}}>MÉTODOS DE TREINO</div>
+          <div style={{fontWeight:900,fontSize:14,color:C.purple}}>METODOS DE TREINO</div>
         </div>
         <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:12}}>
-          Guia completo de métodos de treinamento para aplicação na prescrição de exercícios.
+          Guia completo de metodos de treinamento para aplicacao na prescricao de exercicios.
         </div>
       </div>
     </CardBox>
@@ -1351,12 +1350,13 @@ function MesoEditor({mesociclos, setMesociclos}) {
         </div>
       </CardBox>
     ))}
-        </div>
-      </CardBox>
-    ))}
-          ))}
-        </div>
-      )}
+   ))}
+   </div>   
+  )}  
+  
+         
+        
+      
 
       {tab === "ciencia" && (
         <CardBox>
