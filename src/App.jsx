@@ -1349,15 +1349,10 @@ function MesoEditor({mesociclos, setMesociclos}) {
           </div>
         </div>
       </CardBox>
-    ))}
    ))}
-   </div>   
-  )}  
-  
-         
-        
+  </div>
+)}      
       
-
       {tab === "ciencia" && (
         <CardBox>
           <SectionHead icon="🔬" title="CIÊNCIA DOS MESOCICLOS" color={C.teal} />
