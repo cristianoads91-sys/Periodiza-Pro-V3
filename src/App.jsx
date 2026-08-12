@@ -5,7 +5,9 @@ import {
   ResponsiveContainer, Legend, ReferenceLine
 } from "recharts";
 import { supabase, syncToCloud, loadFromCloud } from "./supabase.js";
-import { trainingMethods, getMethodsByCategory } from './trainingMethods';
+import { gerarTemplateSemana, aplicarTemplateNoMacro, MODALIDADES } from "./templates.js";
+import { gerarRelatorioAnual } from "./relatorio.js";
+
 // ─── PALETTE ─────────────────────────────────────────────────────────
 const C = {
   bg:"#07090d", surface:"#0c1018", card:"#121820", border:"#1a2438",
@@ -295,7 +297,7 @@ function makeDefaultData(today) {
     macro: buildMacroWeeks(today, 52, "linear", "hipertrofia"),
     mesociclos: [],
     presenca: {},
-    exercicios: DEFAULT_EX.map(e => ({...e})),
+    // exercicios foi movido para nível global (compartilhado entre atletas)
   };
 }
 
@@ -523,6 +525,27 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
     default1: makeDefaultData(today),
   });
 
+  // Biblioteca de exercícios global (compartilhada entre todos os atletas)
+  // Faz migração dos exercicios que estavam salvos por atleta (versão antiga)
+  const [exerciciosGlobais, setExerciciosGlobais] = useState(() => {
+    // Se já existe no saved (nova versão), usa
+    if (saved?.exerciciosGlobais && Array.isArray(saved.exerciciosGlobais)) {
+      return saved.exerciciosGlobais;
+    }
+    // Migração: junta exercicios de todos os atletas em uma lista única (sem duplicatas por nome)
+    const merged = {};
+    const dataObj = saved?.atletaData || {};
+    Object.values(dataObj).forEach(d => {
+      (d?.exercicios || []).forEach(e => {
+        const key = (e.nome || "").toLowerCase().trim();
+        if (key && !merged[key]) merged[key] = {...e};
+      });
+    });
+    // Se ainda vazio, usa padrão
+    const migrated = Object.values(merged);
+    return migrated.length > 0 ? migrated : DEFAULT_EX.map(e => ({...e}));
+  });
+
   // Save status (local): "saved" | "saving" | "error"
   const [saveStatus, setSaveStatus] = useState("saved");
   // Cloud sync status: "synced" | "syncing" | "offline" | "error" | "idle"
@@ -548,6 +571,9 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
         if (cloudData.atletas)    setAtletas(cloudData.atletas);
         if (cloudData.atletaData) setAD(cloudData.atletaData);
         if (cloudData.activeAt)   setActiveAt(cloudData.activeAt);
+        if (cloudData.exerciciosGlobais && Array.isArray(cloudData.exerciciosGlobais)) {
+          setExerciciosGlobais(cloudData.exerciciosGlobais);
+        }
       }
       setCloudStatus("synced");
       setLastSyncAt(new Date());
@@ -557,16 +583,16 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
     });
   }, [userId]);
 
-  // Auto-save LOCAL whenever atletas, atletaData, or activeAt change (debounced 400ms)
+  // Auto-save LOCAL whenever atletas, atletaData, activeAt or exerciciosGlobais change (debounced 400ms)
   useEffect(() => {
     setSaveStatus("saving");
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      const ok = saveToStorage({atletas, atletaData, activeAt, savedAt: new Date().toISOString()});
+      const ok = saveToStorage({atletas, atletaData, activeAt, exerciciosGlobais, savedAt: new Date().toISOString()});
       setSaveStatus(ok ? "saved" : "error");
     }, 400);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [atletas, atletaData, activeAt]);
+  }, [atletas, atletaData, activeAt, exerciciosGlobais]);
 
   // Auto-sync to CLOUD when logged in (debounced 2000ms to avoid spamming)
   useEffect(() => {
@@ -575,7 +601,7 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
     setCloudStatus("syncing");
     cloudTimerRef.current = setTimeout(async () => {
       try {
-        const { error } = await syncToCloud(userId, { atletas, atletaData, activeAt });
+        const { error } = await syncToCloud(userId, { atletas, atletaData, activeAt, exerciciosGlobais });
         if (error) {
           console.warn("Cloud sync error:", error);
           setCloudStatus("error");
@@ -589,7 +615,7 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
       }
     }, 2000);
     return () => { if (cloudTimerRef.current) clearTimeout(cloudTimerRef.current); };
-  }, [atletas, atletaData, activeAt, userId]);
+  }, [atletas, atletaData, activeAt, exerciciosGlobais, userId]);
 
   // Monitor online/offline network
   useEffect(() => {
@@ -616,7 +642,7 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
   };
 
   // Export backup
-  const handleExport = () => exportBackup({atletas, atletaData, activeAt});
+  const handleExport = () => exportBackup({atletas, atletaData, activeAt, exerciciosGlobais});
 
   // Import backup
   const handleImport = async (file) => {
@@ -625,6 +651,9 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
       if (imported.atletas)     setAtletas(imported.atletas);
       if (imported.atletaData)  setAD(imported.atletaData);
       if (imported.activeAt)    setActiveAt(imported.activeAt);
+      if (imported.exerciciosGlobais && Array.isArray(imported.exerciciosGlobais)) {
+        setExerciciosGlobais(imported.exerciciosGlobais);
+      }
       return true;
     } catch (e) {
       alert("Erro ao importar backup: " + e.message);
@@ -640,6 +669,24 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
     setAtletas([DEFAULT_ATLETA]);
     setActiveAt("default1");
     setAD({default1: makeDefaultData(today)});
+    setExerciciosGlobais(DEFAULT_EX.map(e => ({...e})));
+  };
+
+  // Gerar relatório PDF do atleta atual
+  const handleGerarRelatorio = () => {
+    const atletaAtual = atletas.find(a => a.id === activeAt);
+    const data = atletaData[activeAt];
+    if (!atletaAtual || !data) {
+      alert("Selecione um atleta primeiro.");
+      return;
+    }
+    gerarRelatorioAnual({
+      atleta:      atletaAtual,
+      macro:       data.macro || [],
+      macroConfig: data.macroConfig || {},
+      exercicios:  exerciciosGlobais || [],
+      mesociclos:  data.mesociclos || [],
+    });
   };
 
   // Safe data accessors
@@ -653,13 +700,15 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
   const macro        = getData().macro        || [];
   const mesociclos   = getData().mesociclos   || [];
   const presenca     = getData().presenca     || {};
-  const exercicios   = getData().exercicios   || [];
+  // Exercícios agora vêm do estado GLOBAL (universal, compartilhado entre atletas)
+  const exercicios   = exerciciosGlobais || [];
 
   const setMacroConfig  = fn => patch(d => ({...d, macroConfig: fn(d.macroConfig || {})}));
   const setMacro        = fn => patch(d => ({...d, macro: fn(d.macro || [])}));
   const setMesociclos   = fn => patch(d => ({...d, mesociclos: fn(d.mesociclos || [])}));
   const setPresenca     = fn => patch(d => ({...d, presenca: fn(d.presenca || {})}));
-  const setExercicios   = fn => patch(d => ({...d, exercicios: fn(d.exercicios || [])}));
+  // setExercicios agora atualiza o estado GLOBAL
+  const setExercicios   = fn => setExerciciosGlobais(prev => fn(prev || []));
 
   const atleta = atletas.find(a => a.id === activeAt) || atletas[0] || DEFAULT_ATLETA;
   const week   = macro[selectedWeek - 1] || null;
@@ -759,13 +808,13 @@ export default function App({ session, offlineMode, onLogout, onExitOffline }) {
       {/* MAIN CONTENT */}
       <div style={{flex:1,maxWidth:900,width:"100%",margin:"0 auto",padding:"10px 9px 74px"}}>
         {view === "dashboard"  && <Dashboard atleta={atleta} macro={macro} macroConfig={macroConfig} selectedWeek={selectedWeek} setSelWeek={setSelWeek} presenca={presenca} setView={setView} mesociclos={mesociclos} />}
-        {view === "macro"      && <MacroEditor macro={macro} setMacro={setMacro} macroConfig={macroConfig} rebuildMacro={rebuildMacro} selectedWeek={selectedWeek} setSelWeek={setSelWeek} today={today} />}
+        {view === "macro"      && <MacroEditor macro={macro} setMacro={setMacro} macroConfig={macroConfig} rebuildMacro={rebuildMacro} selectedWeek={selectedWeek} setSelWeek={setSelWeek} today={today} atleta={atleta} setAtletas={setAtletas} setView={setView} />}
         {view === "meso"       && <MesoEditor mesociclos={mesociclos} setMesociclos={setMesociclos} />}
         {view === "micro"      && <MicroEditor week={week} macro={macro} setMacro={setMacro} exercicios={exercicios} selectedWeek={selectedWeek} setSelWeek={setSelWeek} presenca={presenca} setPresenca={setPresenca} selectedDay={selectedDay} setSelDay={setSelDay} />}
         {view === "graficos"   && <Graficos macro={macro} exercicios={exercicios} />}
         {view === "exercicios" && <ExBanco exercicios={exercicios} setExercicios={setExercicios} />}
         {view === "atletas"    && <AtletasList atletas={atletas} setAtletas={setAtletas} activeAt={activeAt} setActiveAt={setActiveAt} atletaData={atletaData} setAD={setAD} today={today} />}
-        {view === "backup"     && <BackupView atletas={atletas} atletaData={atletaData} saveStatus={saveStatus} cloudStatus={cloudStatus} lastSyncAt={lastSyncAt} session={session} offlineMode={offlineMode} onExport={handleExport} onImport={handleImport} onReset={handleReset} onLogout={onLogout} onExitOffline={onExitOffline} onSyncNow={syncNow} />}
+        {view === "backup"     && <BackupView atletas={atletas} atletaData={atletaData} saveStatus={saveStatus} cloudStatus={cloudStatus} lastSyncAt={lastSyncAt} session={session} offlineMode={offlineMode} onExport={handleExport} onImport={handleImport} onReset={handleReset} onLogout={onLogout} onExitOffline={onExitOffline} onSyncNow={syncNow} onGerarRelatorio={handleGerarRelatorio} atletaAtual={atleta} />}
       </div>
 
       {/* BOTTOM NAV */}
@@ -872,11 +921,17 @@ function Dashboard({atleta, macro, macroConfig, selectedWeek, setSelWeek, presen
 // ═══════════════════════════════════════════════════════════════════════
 // MACRO EDITOR
 // ═══════════════════════════════════════════════════════════════════════
-function MacroEditor({macro, setMacro, macroConfig, rebuildMacro, selectedWeek, setSelWeek, today}) {
+function MacroEditor({macro, setMacro, macroConfig, rebuildMacro, selectedWeek, setSelWeek, today, atleta, setAtletas, setView}) {
   const [cfg, setCfg]       = useState({...macroConfig});
   const [editWid, setEditWid] = useState(null);
   const [sciTipo, setSciTipo] = useState(null);
   const [tab, setTab]       = useState("config");
+
+  // Estado do gerador — armazena config de treino que gera para todo o macro
+  const [genFrequencia, setGenFrequencia] = useState(3);
+  const [genModalidade, setGenModalidade] = useState("musculacao");
+  const [genDias, setGenDias]             = useState([1, 3, 5]); // seg, qua, sex
+  const [genFeedback, setGenFeedback]     = useState(null);      // {tipo, msg}
 
   // Keep cfg in sync if macroConfig changes from outside
   useMemo(() => { setCfg({...macroConfig}); }, [macroConfig]);
@@ -887,6 +942,64 @@ function MacroEditor({macro, setMacro, macroConfig, rebuildMacro, selectedWeek, 
 
   const editW = (wid, field, val) => setMacro(prev => prev.map(w => w.id === wid ? {...w, [field]: val} : w));
   const ew    = editWid ? macro.find(w => w.id === editWid) : null;
+
+  // Helper — atualizar campos do atleta (perfil clínico)
+  const updAtleta = (patch) => {
+    if (!atleta || !setAtletas) return;
+    setAtletas(prev => prev.map(a => a.id === atleta.id ? {...a, ...patch} : a));
+  };
+
+  // Toggle de dias da semana no gerador
+  const toggleDia = (d) => {
+    setGenDias(prev => {
+      const has = prev.includes(d);
+      const next = has ? prev.filter(x => x !== d) : [...prev, d];
+      return next.sort((a,b) => a - b);
+    });
+  };
+
+  // Ajusta genDias se genFrequencia mudar
+  useEffect(() => {
+    if (genDias.length > genFrequencia) {
+      setGenDias(genDias.slice(0, genFrequencia));
+    } else if (genDias.length < genFrequencia) {
+      // Preenche com sugestão sensata
+      const sugestoes = {1:[3], 2:[2,5], 3:[1,3,5], 4:[1,2,4,5], 5:[1,2,3,4,5], 6:[1,2,3,4,5,6]};
+      setGenDias(sugestoes[genFrequencia] || genDias);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [genFrequencia]);
+
+  // Ação: gerar treinos em todas as semanas
+  const handleGerar = (limpar) => {
+    if (genDias.length !== genFrequencia) {
+      setGenFeedback({tipo:"erro", msg:`Selecione ${genFrequencia} dias da semana.`});
+      return;
+    }
+    if (!macro || macro.length === 0) {
+      setGenFeedback({tipo:"erro", msg:"Configure primeiro a duração do macrociclo."});
+      return;
+    }
+    const template = gerarTemplateSemana({
+      objetivo:   cfg.objetivo || "hipertrofia",
+      modalidade: genModalidade,
+      frequencia: genFrequencia,
+      diasSemana: genDias,
+    });
+    // Se limpar=true, zera treinos de cada semana antes
+    let macroBase = macro;
+    if (limpar) {
+      macroBase = macro.map(w => ({
+        ...w,
+        dias: Object.fromEntries(
+          Object.entries(w.dias || {}).map(([k, v]) => [k, {...v, treinos: []}])
+        ),
+      }));
+    }
+    const novoMacro = aplicarTemplateNoMacro(macroBase, template, uid);
+    setMacro(() => novoMacro);
+    setGenFeedback({tipo:"ok", msg:`✅ ${template.treinos.length * macro.length} treinos gerados em ${macro.length} semanas! Verifique no Micro.`});
+  };
 
   const numW   = macro.length;
   const phases = [
@@ -899,7 +1012,13 @@ function MacroEditor({macro, setMacro, macroConfig, rebuildMacro, selectedWeek, 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{fontSize:16,fontWeight:900,color:C.accent}}>📅 MACROCICLO</div>
-      <TabBar tabs={[{id:"config",l:"⚙ Config."},{id:"semanas",l:"📋 Semanas"},{id:"ciencia",l:"📚 Ciencia"}]} active={tab} onSelect={setTab} />
+      <TabBar tabs={[
+        {id:"config",  l:"⚙ Config."},
+        {id:"perfil",  l:"👤 Perfil"},
+        {id:"gerador", l:"🤖 Gerador"},
+        {id:"semanas", l:"📋 Semanas"},
+        {id:"ciencia", l:"📚 Ciência"},
+      ]} active={tab} onSelect={setTab} />
 
       {/* CONFIG */}
       {tab === "config" && (
@@ -988,6 +1107,179 @@ function MacroEditor({macro, setMacro, macroConfig, rebuildMacro, selectedWeek, 
                   <div style={{fontSize:11,fontWeight:700,color:C.text}}>{x.v}</div>
                 </div>
               ))}
+            </div>
+          </CardBox>
+        </div>
+      )}
+
+      {/* PERFIL DO ATLETA — informações clínicas e treinamento */}
+      {tab === "perfil" && (
+        <div style={{display:"flex",flexDirection:"column",gap:11}}>
+          <CardBox accent={C.accent}>
+            <SectionHead icon="👤" title="PERFIL DE TREINAMENTO" color={C.accent} sub="Informações usadas pelo Gerador para personalizar os treinos" />
+            <div style={{padding:14,display:"flex",flexDirection:"column",gap:12}}>
+              <div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:1,marginBottom:4,fontWeight:700}}>📝 OBSERVAÇÕES CLÍNICAS E PESSOAIS</div>
+                <textarea value={atleta?.observacoesClinicas || ""}
+                  onChange={e => updAtleta({observacoesClinicas: e.target.value})}
+                  placeholder="Ex: idade 42 anos, dor lombar crônica ao agachar profundo, cirurgia no joelho direito em 2018, restrição de flexão profunda, pratica corrida amadora aos fins de semana..."
+                  rows={4}
+                  style={{width:"100%",background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"9px 11px",fontSize:12,boxSizing:"border-box",resize:"vertical",fontFamily:"inherit",lineHeight:1.5}}/>
+                <div style={{fontSize:9,color:C.muted,marginTop:4,fontStyle:"italic"}}>💡 Registre idade, lesões, dores, restrições, cirurgias — informação valiosa para decisões futuras.</div>
+              </div>
+              <div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:1,marginBottom:4,fontWeight:700}}>🎯 METAS PESSOAIS DO ATLETA</div>
+                <textarea value={atleta?.metasPessoais || ""}
+                  onChange={e => updAtleta({metasPessoais: e.target.value})}
+                  placeholder="Ex: fazer sua primeira meia-maratona em outubro, ganhar 3kg de massa muscular, reduzir 5% de gordura corporal até dezembro..."
+                  rows={2}
+                  style={{width:"100%",background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"9px 11px",fontSize:12,boxSizing:"border-box",resize:"vertical",fontFamily:"inherit"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:1,marginBottom:4,fontWeight:700}}>⚠️ EXERCÍCIOS A EVITAR</div>
+                <input type="text" value={atleta?.exerciciosEvitar || ""}
+                  onChange={e => updAtleta({exerciciosEvitar: e.target.value})}
+                  placeholder="Ex: agachamento livre, levantamento terra, corrida em asfalto"
+                  style={{width:"100%",background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:7,padding:"9px 11px",fontSize:12,boxSizing:"border-box"}}/>
+              </div>
+            </div>
+          </CardBox>
+        </div>
+      )}
+
+      {/* GERADOR DE TREINOS */}
+      {tab === "gerador" && (
+        <div style={{display:"flex",flexDirection:"column",gap:11}}>
+          <CardBox accent={C.accent}>
+            <SectionHead icon="🤖" title="GERADOR DE TREINOS" color={C.accent} sub="Cria treinos automaticamente em todas as semanas do macrociclo" />
+            <div style={{padding:14,display:"flex",flexDirection:"column",gap:14}}>
+
+              {/* Aviso sobre uso */}
+              <div style={{background:C.blue+"14",borderLeft:`3px solid ${C.blue}`,borderRadius:5,padding:"9px 11px"}}>
+                <div style={{fontSize:10,color:C.blue,fontWeight:700,marginBottom:2}}>💡 COMO FUNCIONA</div>
+                <div style={{fontSize:10,color:C.muted,lineHeight:1.5}}>
+                  Escolha modalidade, frequência semanal e dias da semana. O gerador vai criar treinos personalizados para o <strong style={{color:C.accent}}>objetivo definido no Config</strong> ({obj?.label}) em <strong style={{color:C.accent}}>todas as {macro?.length || 0} semanas</strong> do seu macrociclo.
+                </div>
+              </div>
+
+              {/* Modalidade */}
+              <div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:1,marginBottom:6,fontWeight:700}}>🏋 MODALIDADE</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:6}}>
+                  {MODALIDADES.map(m => {
+                    const sel = genModalidade === m.id;
+                    return (
+                      <button key={m.id} onClick={() => setGenModalidade(m.id)}
+                        style={{background:sel?C.accent+"22":"none",border:`2px solid ${sel?C.accent:C.border}`,color:sel?C.accent:C.muted,borderRadius:8,padding:"9px",fontSize:11,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6,textAlign:"left"}}>
+                        <span style={{fontSize:14}}>{m.icon}</span>
+                        <span>{m.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Frequência */}
+              <div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:1,marginBottom:6,fontWeight:700}}>📆 FREQUÊNCIA SEMANAL — {genFrequencia}x</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:5}}>
+                  {[1,2,3,4,5,6].map(f => (
+                    <button key={f} onClick={() => setGenFrequencia(f)}
+                      style={{background:genFrequencia===f?C.accent+"33":"none",border:`2px solid ${genFrequencia===f?C.accent:C.border}`,color:genFrequencia===f?C.accent:C.muted,borderRadius:8,padding:"10px 2px",fontSize:14,fontWeight:900,cursor:"pointer"}}>
+                      {f}x
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dias da semana */}
+              <div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:1,marginBottom:6,fontWeight:700}}>📅 DIAS DA SEMANA — selecione {genFrequencia} dias</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4}}>
+                  {["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"].map((d, i) => {
+                    const sel = genDias.includes(i);
+                    const disabled = !sel && genDias.length >= genFrequencia;
+                    return (
+                      <button key={i} onClick={() => !disabled && toggleDia(i)}
+                        disabled={disabled}
+                        style={{background:sel?C.accent+"33":"none",border:`2px solid ${sel?C.accent:C.border}`,color:sel?C.accent:disabled?C.subtle:C.muted,borderRadius:7,padding:"9px 2px",fontSize:10,fontWeight:700,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.4:1}}>
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{fontSize:9,color:genDias.length === genFrequencia ? C.green : C.orange,marginTop:5,fontWeight:700}}>
+                  {genDias.length} de {genFrequencia} dias selecionados
+                </div>
+              </div>
+
+              {/* Preview do template */}
+              {genDias.length === genFrequencia && (() => {
+                const tpl = gerarTemplateSemana({
+                  objetivo: cfg.objetivo || "hipertrofia",
+                  modalidade: genModalidade,
+                  frequencia: genFrequencia,
+                  diasSemana: genDias,
+                });
+                const nomesDias = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+                return (
+                  <div>
+                    <div style={{fontSize:9,color:C.muted,letterSpacing:1,marginBottom:6,fontWeight:700}}>👁 PREVIEW DA SEMANA</div>
+                    <div style={{background:C.bg,borderRadius:7,padding:10,border:`1px solid ${C.border}`}}>
+                      {tpl.treinos.map((t, i) => (
+                        <div key={i} style={{marginBottom:i < tpl.treinos.length - 1 ? 8 : 0,paddingBottom:i < tpl.treinos.length - 1 ? 8 : 0,borderBottom:i < tpl.treinos.length - 1 ? `1px solid ${C.border}` : "none"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+                            <Badge cor={C.accent} sm>{nomesDias[t.diaSemana]}</Badge>
+                            <span style={{fontSize:11,fontWeight:700,color:C.text}}>{t.nome}</span>
+                          </div>
+                          <div style={{fontSize:10,color:C.muted,marginLeft:4}}>
+                            {t.exercicios.map(e => e.nome).join(" · ")}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Feedback */}
+              {genFeedback && (
+                <div style={{background:(genFeedback.tipo === "ok" ? C.green : C.red) + "22",border:`1px solid ${(genFeedback.tipo === "ok" ? C.green : C.red)}55`,color:genFeedback.tipo === "ok" ? C.green : C.red,padding:"9px 11px",borderRadius:7,fontSize:11,fontWeight:600}}>
+                  {genFeedback.msg}
+                </div>
+              )}
+
+              {/* Botões de ação */}
+              <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                <button onClick={() => handleGerar(false)}
+                  disabled={genDias.length !== genFrequencia}
+                  style={{background:genDias.length === genFrequencia ? C.accent : C.subtle,color:C.bg,border:"none",borderRadius:8,padding:"12px",fontSize:13,fontWeight:900,cursor:genDias.length === genFrequencia ? "pointer" : "not-allowed",letterSpacing:1}}>
+                  ➕ ADICIONAR TREINOS (mantém existentes)
+                </button>
+                <button onClick={() => {
+                    if (!window.confirm("⚠ Isso vai APAGAR todos os treinos existentes em todas as semanas do macrociclo e gerar novos. Confirma?")) return;
+                    handleGerar(true);
+                  }}
+                  disabled={genDias.length !== genFrequencia}
+                  style={{background:"none",border:`1px solid ${C.red}66`,color:C.red,borderRadius:8,padding:"10px",fontSize:11,fontWeight:700,cursor:genDias.length === genFrequencia ? "pointer" : "not-allowed",opacity:genDias.length === genFrequencia ? 1 : .5}}>
+                  🔄 SUBSTITUIR TODOS OS TREINOS
+                </button>
+                {setView && (
+                  <button onClick={() => setView("micro")}
+                    style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,borderRadius:8,padding:"9px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                    → Ir para o Microciclo verificar
+                  </button>
+                )}
+              </div>
+            </div>
+          </CardBox>
+
+          <CardBox>
+            <SectionHead icon="⚠" title="AVISO IMPORTANTE" color={C.orange} />
+            <div style={{padding:12,fontSize:10,color:C.muted,lineHeight:1.6}}>
+              <p style={{margin:"0 0 6px"}}>O <strong style={{color:C.accent}}>Gerador</strong> cria uma base de treinos com exercícios cientificamente adequados ao objetivo, modalidade e frequência escolhidos. Ele é uma <strong>ferramenta de ponto de partida</strong>, não um substituto do julgamento profissional.</p>
+              <p style={{margin:"0 0 6px"}}>✅ <strong style={{color:C.green}}>O que ele faz bem:</strong> preencher rapidamente semanas em branco com estrutura sensata (divisão A/B/C, séries, reps, pausas).</p>
+              <p style={{margin:0}}>⚠️ <strong style={{color:C.orange}}>O que exige seu ajuste:</strong> exercícios contraindicados por lesão, individualização por biotipo, progressão fina de cargas ao longo das semanas, correspondência com o método de periodização escolhido.</p>
             </div>
           </CardBox>
         </div>
@@ -1318,41 +1610,9 @@ function MesoEditor({mesociclos, setMesociclos}) {
               </div>
             </CardBox>
           ))}
-{/* NOVA SECAO: METODOS DE TREINO */}
-    <CardBox>
-      <div style={{padding:12}}>
-        <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:10}}>
-          <div style={{fontWeight:900,fontSize:14,color:C.purple}}>METODOS DE TREINO</div>
         </div>
-        <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:12}}>
-          Guia completo de metodos de treinamento para aplicacao na prescricao de exercicios.
-        </div>
-      </div>
-    </CardBox>
+      )}
 
-    {Object.entries(getMethodsByCategory()).map(([category, methods]) => (
-      <CardBox key={category}>
-        <div style={{padding:12}}>
-          <div style={{fontWeight:900,fontSize:13,color:C.purple,marginBottom:10,borderBottom:`2px solid ${C.purple}33`,paddingBottom:6}}>
-            {category}
-          </div>
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {methods.map(method => (
-              <div key={method.id} style={{background:C.bg,borderRadius:7,padding:10,border:`1px solid ${C.border}`}}>
-                <div style={{fontWeight:700,fontSize:12,color:C.text,marginBottom:4}}>
-                  {method.name}
-                </div>
-                <div style={{fontSize:10,color:C.muted,lineHeight:1.5}}>
-                  {method.description}
-                </div>
-              </div>
-           ))}
-            </div>
-          </div>
-        </CardBox>
-      ))}
-    </div>
-  )}
       {tab === "ciencia" && (
         <CardBox>
           <SectionHead icon="🔬" title="CIÊNCIA DOS MESOCICLOS" color={C.teal} />
@@ -1454,15 +1714,27 @@ function MicroEditor({week, macro, setMacro, exercicios, selectedWeek, setSelWee
     setShowCopyModal(null);
   };
 
-  const toggleDia = di => {
-    const conc = !getDia(di).concluido;
-    updDia(di, d => ({...d, concluido:conc}));
-    setPresenca(p => ({...(p||{}), [`${week.id}-${di}`]: conc ? "p" : undefined}));
+  // Status do dia: "feito" | "descanso" | "nao_treinou" | null
+  const setStatusDia = (di, novoStatus) => {
+    const atual = getDia(di).status;
+    // Se clicar no mesmo, remove
+    const finalStatus = atual === novoStatus ? null : novoStatus;
+    updDia(di, d => ({...d, status: finalStatus, concluido: finalStatus === "feito"}));
+    setPresenca(p => ({...(p||{}), [`${week.id}-${di}`]: finalStatus === "feito" ? "p" : finalStatus === "descanso" ? "d" : finalStatus === "nao_treinou" ? "f" : undefined}));
+  };
+
+  // Helper para pegar visual do dia
+  const getVisualDia = (dia) => {
+    const s = dia.status;
+    if (s === "feito")        return {cor: C.green,  bg: C.green+"33",  border: C.green,  bgSoft: C.green+"0a",  bgIcon: C.green+"33",  badge: "✓ Feito"};
+    if (s === "descanso")     return {cor: C.blue,   bg: C.blue+"22",   border: C.blue,   bgSoft: C.blue+"08",   bgIcon: C.blue+"22",   badge: "🛌 Descanso"};
+    if (s === "nao_treinou")  return {cor: C.red,    bg: C.red+"22",    border: C.red+"77",bgSoft: C.red+"08",   bgIcon: C.red+"22",    badge: "✕ Não treinou"};
+    return {cor: null, bg: null, border: null, bgSoft: null, bgIcon: null, badge: null};
   };
 
   const dias          = getDias();
   const totalTreinos  = Object.values(dias).reduce((s,d) => s + (d.treinos?.length||0), 0);
-  const diasFeitos    = Object.values(dias).filter(d => d.concluido).length;
+  const diasFeitos    = Object.values(dias).filter(d => d.status === "feito" || d.concluido).length;
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:11}}>
@@ -1496,11 +1768,6 @@ function MicroEditor({week, macro, setMacro, exercicios, selectedWeek, setSelWee
           </div>
           {tipo && <div style={{fontSize:9,color:tipo.cor,marginTop:4}}>💡 {tipo.desc}</div>}
         </div>
-        {/* PSE/PSR semana */}
-        <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          <PSEPick value={week.pse || null} onChange={v => updWeek("pse", v)} type="pse" />
-          <PSEPick value={week.psr || null} onChange={v => updWeek("psr", v)} type="psr" />
-        </div>
       </div>
 
       <TabBar tabs={[{id:"semana",l:"📅 Semana"},{id:"prescricao",l:"📋 Prescricao"},{id:"tipos",l:"📚 Tipos"}]} active={tab} onSelect={setTab} />
@@ -1513,19 +1780,22 @@ function MicroEditor({week, macro, setMacro, exercicios, selectedWeek, setSelWee
             const data   = fmtDate(addDays(week.startDate, di));
             const isOpen = selectedDay === di;
             const hasTr  = (dia.treinos?.length||0) > 0;
+            const visDia = getVisualDia(dia);
+            const status = dia.status;
+            const highlight = visDia.cor || (hasTr ? C.accent : C.muted);
             return (
-              <div key={di} style={{background:C.card,border:`1px solid ${dia.concluido?C.green+"55":hasTr?C.border:C.border}`,borderRadius:11,overflow:"hidden"}}>
+              <div key={di} style={{background:C.card,border:`1px solid ${visDia.border || (hasTr?C.border:C.border)}`,borderRadius:11,overflow:"hidden"}}>
                 {/* Day header */}
-                <div onClick={() => setSelDay(isOpen ? null : di)} style={{padding:"10px 13px",display:"flex",alignItems:"center",gap:9,cursor:"pointer",background:dia.concluido?C.green+"0a":hasTr?C.accent+"07":"none"}}>
-                  <div style={{width:36,height:36,background:dia.concluido?C.green+"33":hasTr?C.accent+"22":C.subtle,border:`2px solid ${dia.concluido?C.green:hasTr?C.accent:C.border}`,borderRadius:9,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                    <div style={{fontSize:8,color:dia.concluido?C.green:hasTr?C.accent:C.muted,fontWeight:700}}>{DIAS_SHORT[di]}</div>
-                    <div style={{fontSize:10,fontWeight:900,color:dia.concluido?C.green:hasTr?C.accent:C.muted}}>{data.slice(0,2)}</div>
+                <div onClick={() => setSelDay(isOpen ? null : di)} style={{padding:"10px 13px",display:"flex",alignItems:"center",gap:9,cursor:"pointer",background:visDia.bgSoft || (hasTr?C.accent+"07":"none")}}>
+                  <div style={{width:36,height:36,background:visDia.bgIcon || (hasTr?C.accent+"22":C.subtle),border:`2px solid ${highlight}`,borderRadius:9,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    <div style={{fontSize:8,color:highlight,fontWeight:700}}>{DIAS_SHORT[di]}</div>
+                    <div style={{fontSize:10,fontWeight:900,color:highlight}}>{data.slice(0,2)}</div>
                   </div>
                   <div style={{flex:1}}>
-                    <div style={{display:"flex",alignItems:"center",gap:6}}>
-                      <span style={{fontSize:12,fontWeight:700,color:dia.concluido?C.green:hasTr?C.text:C.muted}}>{dNome}</span>
+                    <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                      <span style={{fontSize:12,fontWeight:700,color:status ? highlight : (hasTr?C.text:C.muted)}}>{dNome}</span>
                       <span style={{fontSize:10,color:C.muted}}>{data}</span>
-                      {dia.concluido && <Badge cor={C.green} sm>✓ Feito</Badge>}
+                      {visDia.badge && <Badge cor={visDia.cor} sm>{visDia.badge}</Badge>}
                     </div>
                     <div style={{fontSize:10,color:C.muted,marginTop:1}}>
                       {hasTr ? `${dia.treinos.length} treino${dia.treinos.length>1?"s":""} · ${dia.treinos.reduce((s,t)=>s+(t.exercicios?.length||0),0)} exerc.` : "Descanso"}
@@ -1617,78 +1887,6 @@ function MicroEditor({week, macro, setMacro, exercicios, selectedWeek, setSelWee
                                     style={{width:"100%",background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:5,padding:"5px 6px",fontSize:11,boxSizing:"border-box"}}/>
                                 </div>
                               </div>
-                              {/* MÉTODO DE TREINO */}
-<div style={{marginBottom:7}}>
-  <div style={{fontSize:8,color:C.purple,letterSpacing:.5,marginBottom:2,fontWeight:700}}>💪 MÉTODO DE TREINO</div>
-  <select 
-    value={ex.metodo||"tradicional"}
-    onChange={e => updExField(di, treino.id, ei, "metodo", e.target.value)}
-    style={{
-      width:"100%",
-      background:ex.metodo && ex.metodo !== "tradicional" ? C.purple+"14" : C.bg,
-      border:`1px solid ${ex.metodo && ex.metodo !== "tradicional" ? C.purple+"55" : C.border}`,
-      color:ex.metodo && ex.metodo !== "tradicional" ? C.purple : C.text,
-      borderRadius:5,
-      padding:"5px 7px",
-      fontSize:11,
-      fontWeight:ex.metodo && ex.metodo !== "tradicional" ? 700 : 400,
-      boxSizing:"border-box"
-    }}>
-    <option value="tradicional">Tradicional</option>
-    <optgroup label="Intensificação">
-      <option value="super-set">Super-set</option>
-      <option value="bi-set">Bi-set</option>
-      <option value="tri-set">Tri-set</option>
-      <option value="set-gigante">Set Gigante</option>
-      <option value="drop-set">Drop-set</option>
-      <option value="rest-pause">Rest-pause</option>
-      <option value="fst-7">FST-7</option>
-      <option value="21s">21s</option>
-      <option value="cluster-set">Cluster Set</option>
-    </optgroup>
-    <optgroup label="Contração">
-      <option value="isometrico">Isométrico</option>
-      <option value="excentrico">Excêntrico</option>
-      <option value="concentrico">Concêntrico</option>
-      <option value="isodinamico">Isodinâmico</option>
-    </optgroup>
-    <optgroup label="Velocidade/Potência">
-      <option value="pliometrico">Pliométrico</option>
-      <option value="balistico">Balístico</option>
-      <option value="cat">CAT</option>
-    </optgroup>
-    <optgroup label="Pirâmide">
-      <option value="piramide-crescente">Pirâmide Crescente</option>
-      <option value="piramide-decrescente">Pirâmide Decrescente</option>
-      <option value="piramide-truncada">Pirâmide Truncada</option>
-    </optgroup>
-    <optgroup label="Repetição">
-      <option value="repeticoes-forcadas">Repetições Forçadas</option>
-      <option value="repeticoes-parciais">Repetições Parciais</option>
-      <option value="repeticoes-negativas">Repetições Negativas</option>
-      <option value="1-1-4-rep">1-1/4 Rep</option>
-    </optgroup>
-    <optgroup label="Tensão/Tempo">
-      <option value="tut">TUT (Time Under Tension)</option>
-      <option value="isometria-funcional">Isometria Funcional</option>
-      <option value="contraste-carga">Contraste de Carga</option>
-      <option value="bfr">Oclusão Vascular (BFR)</option>
-    </optgroup>
-    <optgroup label="Avançado">
-      <option value="pre-exaustao">Pré-exaustão</option>
-      <option value="pos-exaustao">Pós-exaustão</option>
-      <option value="onda">Onda</option>
-      <option value="contrast-loading">Contrast Loading</option>
-      <option value="complex-training">Complex Training</option>
-      <option value="edt">EDT</option>
-      <option value="dc-training">DC Training</option>
-      <option value="gvt">GVT (10x10)</option>
-      <option value="5x5">5x5</option>
-      <option value="stripping">Stripping</option>
-      <option value="burns">Burns</option>
-    </optgroup>
-  </select>
-</div>
 
                               {/* Distância total + unidade + tempo – importante para corrida/ciclismo/natação */}
                               <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:5,marginBottom:8}}>
@@ -1795,9 +1993,18 @@ function MicroEditor({week, macro, setMacro, exercicios, selectedWeek, setSelWee
                       />
                     )}
 
-                    <button onClick={() => toggleDia(di)} style={{width:"100%",background:dia.concluido?C.green+"22":"none",border:`1px solid ${dia.concluido?C.green:C.border}`,color:dia.concluido?C.green:C.muted,borderRadius:7,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                      {dia.concluido ? "✓ Dia Concluido" : "✓ Marcar Dia como Feito"}
-                    </button>
+                    {/* Botões de status do dia */}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:5}}>
+                      <button onClick={() => setStatusDia(di, "feito")} style={{background:status==="feito"?C.green+"33":"none",border:`1px solid ${status==="feito"?C.green:C.border}`,color:status==="feito"?C.green:C.muted,borderRadius:7,padding:"8px 3px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                        ✓ Feito
+                      </button>
+                      <button onClick={() => setStatusDia(di, "descanso")} style={{background:status==="descanso"?C.blue+"33":"none",border:`1px solid ${status==="descanso"?C.blue:C.border}`,color:status==="descanso"?C.blue:C.muted,borderRadius:7,padding:"8px 3px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                        🛌 Descanso
+                      </button>
+                      <button onClick={() => setStatusDia(di, "nao_treinou")} style={{background:status==="nao_treinou"?C.red+"33":"none",border:`1px solid ${status==="nao_treinou"?C.red:C.border}`,color:status==="nao_treinou"?C.red:C.muted,borderRadius:7,padding:"8px 3px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                        ✕ Não treinou
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2127,19 +2334,92 @@ function Graficos({macro, exercicios}) {
     return list.includes(exNome) ? exNome : (list[0]||"");
   }, [exercicios, exNome]);
 
+  // VOLUME DINÂMICO — calculado em tempo real a partir do preenchimento no micro
+  // Cada semana soma: nº de séries × reps × cargas dos exercícios registrados
   const volumeData = useMemo(() =>
-    (macro||[]).slice(0, Math.min(26, macro?.length||0)).map(w => ({
-      semana: `S${w.id}`,
-      series: w.series || 0,
-      intensidade: w.intensidade || 0,
-    })), [macro]);
+    (macro||[]).slice(0, Math.min(52, macro?.length||0)).map(w => {
+      let totalSeries       = 0;
+      let totalReps         = 0;
+      let totalTonelagem    = 0;   // séries × reps × carga (kg movimentados)
+      let totalExercicios   = 0;
+      let totalTreinos      = 0;
+      let diasFeitos        = 0;
+      Object.values(w.dias||{}).forEach(d => {
+        if (d.status === "feito" || d.concluido) diasFeitos++;
+        (d.treinos||[]).forEach(t => {
+          totalTreinos++;
+          (t.exercicios||[]).forEach(ex => {
+            totalExercicios++;
+            (ex.sets||[]).forEach(s => {
+              totalSeries++;
+              const reps  = typeof s.reps  === "number" ? s.reps  : 0;
+              const carga = typeof s.carga === "number" ? s.carga : 0;
+              totalReps      += reps;
+              totalTonelagem += reps * carga;
+            });
+          });
+        });
+      });
+      return {
+        semana:      `S${w.id}`,
+        series:      totalSeries,
+        reps:        totalReps,
+        tonelagem:   Math.round(totalTonelagem),
+        exercicios:  totalExercicios,
+        treinos:     totalTreinos,
+        diasFeitos,
+        // Volume planejado (config semana) para comparar com o executado
+        seriesPlanejadas: w.series || 0,
+        intensidadePlan:  w.intensidade || 0,
+      };
+    }).filter(d => d.series > 0 || d.seriesPlanejadas > 0)
+  , [macro]);
 
-  const pseData = useMemo(() =>
-    (macro||[]).filter(w => w && w.pse != null).map(w => {
-      const dias   = Object.values(w.dias||{});
-      const sessoes= Math.max(dias.filter(d=>d.concluido).length, 1);
-      return {semana:`S${w.id}`, pse:w.pse, psr:w.psr||0, cargaInterna:(w.pse||0)*sessoes};
-    }), [macro]);
+  // PSE DETALHADO — cada dia com PSE preenchido vira um ponto
+  // Também calcula monotonia e strain (Foster) por semana
+  const pseData = useMemo(() => {
+    const semanaMap = {};
+    (macro||[]).forEach(w => {
+      const psePorDia = [];
+      Object.values(w.dias||{}).forEach(d => {
+        if (typeof d.pse === "number" && d.pse > 0) {
+          const dur = typeof d.duracao === "number" ? d.duracao : (parseInt(d.duracao) || 60);
+          psePorDia.push({pse: d.pse, duracao: dur, carga: d.pse * dur});
+        }
+      });
+      if (psePorDia.length === 0) return;
+      const pseMedia    = psePorDia.reduce((s,x) => s+x.pse, 0) / psePorDia.length;
+      const cargaTotal  = psePorDia.reduce((s,x) => s+x.carga, 0);
+      // Monotonia = média / desvio-padrão (Foster, 1998)
+      const desvio = Math.sqrt(psePorDia.reduce((s,x) => s + Math.pow(x.pse - pseMedia, 2), 0) / psePorDia.length) || 0.01;
+      const monotonia = +(pseMedia / desvio).toFixed(2);
+      // Strain = carga × monotonia
+      const strain = Math.round(cargaTotal * monotonia);
+      semanaMap[w.id] = {
+        semana:       `S${w.id}`,
+        pseMedia:     +pseMedia.toFixed(1),
+        pseMax:       Math.max(...psePorDia.map(x=>x.pse)),
+        pseMin:       Math.min(...psePorDia.map(x=>x.pse)),
+        cargaInterna: Math.round(cargaTotal),
+        monotonia,
+        strain,
+        sessoes:      psePorDia.length,
+      };
+    });
+    return Object.values(semanaMap);
+  }, [macro]);
+
+  // PSR média por semana (recuperação)
+  const psrData = useMemo(() => {
+    const arr = [];
+    (macro||[]).forEach(w => {
+      const psrs = Object.values(w.dias||{}).map(d => d.psr).filter(v => typeof v === "number" && v > 0);
+      if (psrs.length === 0) return;
+      const media = psrs.reduce((s,v) => s+v, 0) / psrs.length;
+      arr.push({semana:`S${w.id}`, psr: +media.toFixed(1), amostras: psrs.length});
+    });
+    return arr;
+  }, [macro]);
 
   const evolData = useMemo(() => {
     if (!safeExNome) return [];
@@ -2242,73 +2522,208 @@ function Graficos({macro, exercicios}) {
       <TabBar tabs={[{id:"volume",l:"📊 Volume"},{id:"monotonia",l:"🧠 PSE"},{id:"carga",l:"🏋 Carga"},{id:"distancia",l:"🏃 Distância"}]} active={tab} onSelect={setTab} />
 
       {tab === "volume" && (
-        <CardBox>
-          <SectionHead icon="📊" title="VOLUME E INTENSIDADE PLANEJADOS" color={C.blue} sub="Issurin (2010) – ondulacao de volume" />
-          <div style={{padding:14}}>
-            {volumeData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={volumeData} margin={{top:4,right:4,left:-24,bottom:0}}>
-                  <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
-                  <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} interval={1} />
-                  <YAxis tick={{fill:C.muted,fontSize:8}} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Legend wrapperStyle={{fontSize:10}} />
-                  <Bar dataKey="series" name="Series" fill={C.blue+"77"} radius={[3,3,0,0]} />
-                  <Bar dataKey="intensidade" name="% 1RM" fill={C.orange+"77"} radius={[3,3,0,0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : <div style={{textAlign:"center",padding:30,color:C.muted,fontSize:11}}>Nenhum dado disponivel.</div>}
-          </div>
-        </CardBox>
+        <div style={{display:"flex",flexDirection:"column",gap:11}}>
+          <CardBox>
+            <SectionHead icon="📊" title="VOLUME EXECUTADO — TEMPO REAL" color={C.blue} sub="Séries e tonelagem por semana (do que foi registrado no micro)" />
+            <div style={{padding:14}}>
+              {volumeData.length > 0 ? (
+                <>
+                  <ResponsiveContainer width="100%" height={210}>
+                    <BarChart data={volumeData} margin={{top:4,right:4,left:-20,bottom:0}}>
+                      <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
+                      <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} interval={0} />
+                      <YAxis yAxisId="l" tick={{fill:C.muted,fontSize:8}} />
+                      <YAxis yAxisId="r" orientation="right" tick={{fill:C.muted,fontSize:8}} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Legend wrapperStyle={{fontSize:10}} />
+                      <Bar  yAxisId="l" dataKey="series"      name="Séries executadas" fill={C.blue+"88"}   radius={[3,3,0,0]} />
+                      <Line yAxisId="r" dataKey="tonelagem"   name="Tonelagem (kg)"    stroke={C.orange}    strokeWidth={2} dot={{r:3,fill:C.orange}} type="monotone" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                  {/* Cards resumo */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginTop:11}}>
+                    {(() => {
+                      const totalS   = volumeData.reduce((s,d)=>s+d.series,0);
+                      const totalT   = volumeData.reduce((s,d)=>s+d.tonelagem,0);
+                      const totalE   = volumeData.reduce((s,d)=>s+d.exercicios,0);
+                      const totalTr  = volumeData.reduce((s,d)=>s+d.treinos,0);
+                      return [
+                        {l:"Séries",     v:totalS,               c:C.blue},
+                        {l:"Tonelagem",  v:(totalT/1000).toFixed(1)+"t", c:C.orange},
+                        {l:"Exercícios", v:totalE,               c:C.green},
+                        {l:"Treinos",    v:totalTr,              c:C.accent},
+                      ].map(s => (
+                        <div key={s.l} style={{background:C.bg,borderRadius:7,padding:"7px 4px",textAlign:"center",border:`1px solid ${s.c}33`}}>
+                          <div style={{fontSize:13,fontWeight:900,color:s.c}}>{s.v}</div>
+                          <div style={{fontSize:8,color:C.muted}}>{s.l}</div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </>
+              ) : (
+                <div style={{textAlign:"center",padding:24,color:C.muted,fontSize:11}}>
+                  <div style={{fontSize:26,marginBottom:5}}>📊</div>
+                  <div>Nenhum volume registrado ainda.</div>
+                  <div style={{fontSize:10,marginTop:3}}>Preencha séries, reps e cargas no Microciclo para ver o gráfico.</div>
+                </div>
+              )}
+            </div>
+          </CardBox>
+
+          <CardBox>
+            <SectionHead icon="📈" title="EXECUTADO × PLANEJADO" color={C.purple} sub="Compare o volume real com o programado" />
+            <div style={{padding:14}}>
+              {volumeData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={volumeData} margin={{top:4,right:4,left:-20,bottom:0}}>
+                    <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
+                    <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} interval={0} />
+                    <YAxis tick={{fill:C.muted,fontSize:8}} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Legend wrapperStyle={{fontSize:10}} />
+                    <Bar dataKey="seriesPlanejadas" name="Planejado" fill={C.muted+"66"} radius={[3,3,0,0]} />
+                    <Bar dataKey="series"           name="Executado" fill={C.blue+"aa"}  radius={[3,3,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : <div style={{textAlign:"center",padding:20,color:C.muted,fontSize:11}}>Sem dados.</div>}
+            </div>
+          </CardBox>
+        </div>
       )}
 
       {tab === "monotonia" && (
         <div style={{display:"flex",flexDirection:"column",gap:11}}>
           <CardBox>
-            <SectionHead icon="🧠" title="PSE & PSR SEMANAL" color={C.orange} sub="Foster (1998); Kenttä & Hassmén (1998)" />
+            <SectionHead icon="🧠" title="PSE MÉDIA POR SEMANA" color={C.orange} sub="Foster (1998) – Percepção Subjetiva de Esforço agregada por dia" />
             <div style={{padding:14}}>
               {pseData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={180}>
-                  <LineChart data={pseData} margin={{top:4,right:4,left:-24,bottom:0}}>
-                    <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
-                    <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} />
-                    <YAxis domain={[0,10]} tick={{fill:C.muted,fontSize:8}} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Legend wrapperStyle={{fontSize:10}} />
-                    <ReferenceLine y={7} stroke={C.red} strokeDasharray="3 3" />
-                    <Line type="monotone" dataKey="pse" name="PSE" stroke={C.orange} strokeWidth={2} dot={{r:3,fill:C.orange}} />
-                    <Line type="monotone" dataKey="psr" name="PSR" stroke={C.green} strokeWidth={2} dot={{r:3,fill:C.green}} />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : <div style={{textAlign:"center",padding:30,color:C.muted,fontSize:11}}>Marque PSE no Microciclo para visualizar.</div>}
+                <>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={pseData} margin={{top:4,right:4,left:-24,bottom:0}}>
+                      <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
+                      <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} />
+                      <YAxis domain={[0,10]} tick={{fill:C.muted,fontSize:8}} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Legend wrapperStyle={{fontSize:10}} />
+                      <ReferenceLine y={7} stroke={C.red} strokeDasharray="3 3" label={{value:"Alto",fill:C.red,fontSize:9}} />
+                      <ReferenceLine y={4} stroke={C.green} strokeDasharray="3 3" label={{value:"Baixo",fill:C.green,fontSize:9}} />
+                      <Line type="monotone" dataKey="pseMax"   name="PSE Máx"   stroke={C.red}    strokeWidth={1.5} dot={{r:2}} strokeDasharray="4 3" />
+                      <Line type="monotone" dataKey="pseMedia" name="PSE Média" stroke={C.orange} strokeWidth={2.5} dot={{r:3,fill:C.orange}} />
+                      <Line type="monotone" dataKey="pseMin"   name="PSE Mín"   stroke={C.green}  strokeWidth={1.5} dot={{r:2}} strokeDasharray="4 3" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </>
+              ) : <div style={{textAlign:"center",padding:24,color:C.muted,fontSize:11}}>
+                <div style={{fontSize:26,marginBottom:5}}>🧠</div>
+                Marque PSE no Microciclo (em cada dia) para visualizar.
+              </div>}
             </div>
           </CardBox>
+
+          {pseData.length > 0 && (
+            <>
+              <CardBox>
+                <SectionHead icon="⚡" title="CARGA INTERNA SEMANAL" color={C.red} sub="Foster: PSE × duração da sessão (unidades arbitrárias)" />
+                <div style={{padding:14}}>
+                  <ResponsiveContainer width="100%" height={170}>
+                    <BarChart data={pseData} margin={{top:4,right:4,left:-24,bottom:0}}>
+                      <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
+                      <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} />
+                      <YAxis tick={{fill:C.muted,fontSize:8}} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="cargaInterna" name="Carga Interna" fill={C.red+"88"} radius={[3,3,0,0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </CardBox>
+
+              <CardBox>
+                <SectionHead icon="📏" title="MONOTONIA & STRAIN" color={C.purple} sub="Foster: monotonia > 2 = risco / strain agrega magnitude do risco" />
+                <div style={{padding:14}}>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <LineChart data={pseData} margin={{top:4,right:4,left:-20,bottom:0}}>
+                      <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
+                      <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} />
+                      <YAxis yAxisId="l" tick={{fill:C.muted,fontSize:8}} domain={[0,'auto']} />
+                      <YAxis yAxisId="r" orientation="right" tick={{fill:C.muted,fontSize:8}} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Legend wrapperStyle={{fontSize:10}} />
+                      <ReferenceLine yAxisId="l" y={2} stroke={C.orange} strokeDasharray="3 3" />
+                      <Line yAxisId="l" type="monotone" dataKey="monotonia" name="Monotonia" stroke={C.purple} strokeWidth={2} dot={{r:3,fill:C.purple}} />
+                      <Line yAxisId="r" type="monotone" dataKey="strain"    name="Strain"    stroke={C.red}    strokeWidth={2} dot={{r:3,fill:C.red}} strokeDasharray="5 3" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </CardBox>
+
+              {psrData.length > 0 && (
+                <CardBox>
+                  <SectionHead icon="💚" title="PSR — RECUPERAÇÃO" color={C.green} sub="Kenttä & Hassmén (1998) – média dos dias com PSR preenchido" />
+                  <div style={{padding:14}}>
+                    <ResponsiveContainer width="100%" height={170}>
+                      <LineChart data={psrData} margin={{top:4,right:4,left:-24,bottom:0}}>
+                        <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
+                        <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} />
+                        <YAxis domain={[0,10]} tick={{fill:C.muted,fontSize:8}} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <ReferenceLine y={7} stroke={C.green} strokeDasharray="3 3" label={{value:"Ok p/ intenso",fill:C.green,fontSize:9}} />
+                        <Line type="monotone" dataKey="psr" name="PSR Média" stroke={C.green} strokeWidth={2.5} dot={{r:3,fill:C.green}} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardBox>
+              )}
+
+              {/* Tabela detalhada */}
+              <CardBox>
+                <SectionHead icon="📋" title="RESUMO SEMANAL" color={C.muted} />
+                <div style={{padding:0,overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                    <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                      {["Sem.","Sessões","PSE Média","Carga","Monotonia","Strain"].map(h => (
+                        <th key={h} style={{padding:"6px 7px",color:C.muted,fontWeight:700,textAlign:"left",fontSize:9,letterSpacing:.5}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {pseData.map((d,i) => {
+                        const monoC = d.monotonia < 2 ? C.green : d.monotonia < 3 ? C.orange : C.red;
+                        return (
+                          <tr key={i} style={{borderBottom:`1px solid ${C.border}`}}>
+                            <td style={{padding:"5px 7px",color:C.text,fontWeight:700}}>{d.semana}</td>
+                            <td style={{padding:"5px 7px",color:C.muted}}>{d.sessoes}</td>
+                            <td style={{padding:"5px 7px",color:C.orange,fontWeight:700}}>{d.pseMedia}</td>
+                            <td style={{padding:"5px 7px",color:C.red}}>{d.cargaInterna}</td>
+                            <td style={{padding:"5px 7px",color:monoC,fontWeight:700}}>{d.monotonia}</td>
+                            <td style={{padding:"5px 7px",color:C.purple}}>{d.strain}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </CardBox>
+            </>
+          )}
+
           <CardBox>
-            <SectionHead icon="⚡" title="CARGA INTERNA" color={C.red} sub="Carga = PSE x sessoes concluidas" />
-            <div style={{padding:14}}>
-              {pseData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={pseData} margin={{top:4,right:4,left:-24,bottom:0}}>
-                    <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
-                    <XAxis dataKey="semana" tick={{fill:C.muted,fontSize:8}} />
-                    <YAxis tick={{fill:C.muted,fontSize:8}} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="cargaInterna" name="Carga Interna" fill={C.red+"88"} radius={[3,3,0,0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : <div style={{textAlign:"center",padding:20,color:C.muted,fontSize:11}}>Sem dados de PSE.</div>}
-            </div>
-          </CardBox>
-          <CardBox>
-            <SectionHead icon="📖" title="REFERENCIA – MONOTONIA" color={C.muted} />
+            <SectionHead icon="📖" title="REFERÊNCIA – MONOTONIA (Foster, 1998)" color={C.muted} />
             <div style={{padding:12}}>
-              {[{r:"< 2",l:"Variacao adequada – baixo risco",c:C.green},{r:"2 – 3",l:"Atencao – considere variar carga",c:C.orange},{r:"> 3",l:"Alto risco – risco de overtraining",c:C.red}].map(x => (
+              {[
+                {r:"< 2",   l:"Variação adequada – baixo risco",   c:C.green},
+                {r:"2 – 3", l:"Atenção – considere variar carga",  c:C.orange},
+                {r:"> 3",   l:"Alto risco – risco de overtraining",c:C.red},
+              ].map(x => (
                 <div key={x.r} style={{display:"flex",alignItems:"center",gap:7,marginBottom:5}}>
                   <div style={{width:7,height:7,borderRadius:"50%",background:x.c}} />
                   <Badge cor={x.c} sm>{x.r}</Badge>
                   <span style={{fontSize:10,color:C.muted}}>{x.l}</span>
                 </div>
               ))}
+              <div style={{fontSize:10,color:C.muted,marginTop:8,lineHeight:1.5}}>
+                <strong style={{color:C.text}}>Strain</strong> = Carga interna × Monotonia. Reflete o risco cumulativo da semana.<br/>
+                <strong style={{color:C.text}}>Referência ideal</strong>: variar PSE ao longo dos dias (alto/moderado/baixo) para monotonia &lt; 2.
+              </div>
             </div>
           </CardBox>
         </div>
@@ -3337,7 +3752,7 @@ function AtletasList({atletas, setAtletas, activeAt, setActiveAt, atletaData, se
 // ═══════════════════════════════════════════════════════════════════════
 // BACKUP VIEW – Export/Import JSON for cross-device sync
 // ═══════════════════════════════════════════════════════════════════════
-function BackupView({atletas, atletaData, saveStatus, cloudStatus, lastSyncAt, session, offlineMode, onExport, onImport, onReset, onLogout, onExitOffline, onSyncNow}) {
+function BackupView({atletas, atletaData, saveStatus, cloudStatus, lastSyncAt, session, offlineMode, onExport, onImport, onReset, onLogout, onExitOffline, onSyncNow, onGerarRelatorio, atletaAtual}) {
   const fileInputRef = useRef(null);
   const [importStatus, setImportStatus] = useState(null); // null | "success" | "error"
   const userEmail = session?.user?.email;
@@ -3375,7 +3790,47 @@ function BackupView({atletas, atletaData, saveStatus, cloudStatus, lastSyncAt, s
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
-      <div style={{fontSize:16,fontWeight:900,color:C.accent}}>💾 BACKUP & SINCRONIZAÇÃO</div>
+      <div style={{fontSize:16,fontWeight:900,color:C.accent}}>💾 BACKUP & RELATÓRIOS</div>
+
+      {/* RELATÓRIO PDF ANUAL */}
+      <CardBox accent={C.purple}>
+        <SectionHead icon="📄" title="RELATÓRIO ANUAL PDF" color={C.purple} sub="Documento profissional com toda a periodização científica" />
+        <div style={{padding:13}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:11}}>
+            <div style={{width:44,height:44,background:C.purple+"22",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
+              📊
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:900,color:C.text}}>Gerar relatório do atleta atual</div>
+              <div style={{fontSize:10,color:C.muted,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                <strong style={{color:C.accent}}>{atletaAtual?.nome || "Nenhum atleta selecionado"}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div style={{background:C.bg,borderRadius:7,padding:"9px 11px",fontSize:10,color:C.muted,lineHeight:1.5,marginBottom:11}}>
+            📖 <strong style={{color:C.purple}}>O relatório inclui:</strong>
+            <ul style={{margin:"5px 0 0",paddingLeft:16}}>
+              <li>Dados do atleta e histórico clínico</li>
+              <li>Planejamento científico (modelo, fases, referências)</li>
+              <li>Estatísticas de execução e adesão</li>
+              <li>Análise de volume por fase</li>
+              <li>Controle de carga interna (PSE, PSR)</li>
+              <li>Conclusão e recomendações fundamentadas</li>
+            </ul>
+          </div>
+
+          <button onClick={onGerarRelatorio}
+            disabled={!atletaAtual}
+            style={{width:"100%",background:C.purple,color:"#fff",border:"none",borderRadius:8,padding:"12px",fontSize:13,fontWeight:900,cursor:atletaAtual?"pointer":"not-allowed",opacity:atletaAtual?1:.5,letterSpacing:1}}>
+            📄 GERAR RELATÓRIO PDF
+          </button>
+
+          <div style={{fontSize:9,color:C.muted,marginTop:8,textAlign:"center",fontStyle:"italic",lineHeight:1.4}}>
+            💡 Uma nova janela vai abrir. Clique em <strong>"Imprimir / Salvar PDF"</strong> no topo. No iPhone/iPad, escolha <strong>"Salvar em Arquivos"</strong>.
+          </div>
+        </div>
+      </CardBox>
 
       {/* ACCOUNT + CLOUD SYNC SECTION */}
       {userId ? (
